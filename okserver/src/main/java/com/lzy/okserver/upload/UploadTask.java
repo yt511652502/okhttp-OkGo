@@ -1,135 +1,300 @@
+/*
+ * Copyright 2016 jeasonlzy(廖子尧)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.lzy.okserver.upload;
 
-import android.os.Message;
+import android.content.ContentValues;
 
-import com.lzy.okserver.listener.UploadListener;
-import com.lzy.okserver.task.PriorityAsyncTask;
-import com.lzy.okgo.callback.AbsCallback;
+import com.lzy.okgo.db.UploadManager;
+import com.lzy.okgo.model.Progress;
+import com.lzy.okgo.model.Response;
+import com.lzy.okgo.request.base.ProgressRequestBody;
+import com.lzy.okgo.request.base.Request;
+import com.lzy.okgo.utils.HttpUtils;
+import com.lzy.okgo.utils.OkLogger;
+import com.lzy.okserver.OkUpload;
+import com.lzy.okserver.task.PriorityRunnable;
 
-import java.io.IOException;
+import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import okhttp3.Call;
-import okhttp3.Response;
 
 /**
  * ================================================
- * 作    者：廖子尧
+ * 作    者：jeasonlzy（廖子尧）Github地址：https://github.com/jeasonlzy
  * 版    本：1.0
  * 创建日期：2016/1/26
  * 描    述：上传任务类
  * 修订历史：
  * ================================================
  */
-public class UploadTask<T> extends PriorityAsyncTask<Void, UploadInfo, UploadInfo> {
+public class UploadTask<T> implements Runnable {
 
-    private UploadUIHandler mUploadUIHandler;    //下载UI回调
-    private UploadInfo mUploadInfo;              //当前任务的信息
+    public Progress progress;
+    public Map<Object, UploadListener<T>> listeners;
+    private ThreadPoolExecutor executor;
+    private PriorityRunnable priorityRunnable;
 
-    public UploadTask(UploadInfo downloadInfo, UploadListener<T> uploadListener) {
-        mUploadInfo = downloadInfo;
-        mUploadInfo.setListener(uploadListener);
-        mUploadUIHandler = UploadManager.getInstance().getHandler();
-        //将当前任务在定义的线程池中执行
-        executeOnExecutor(UploadManager.getInstance().getThreadPool().getExecutor());
+    public UploadTask(String tag, Request<T, ? extends Request> request) {
+        HttpUtils.checkNotNull(tag, "tag == null");
+        progress = new Progress();
+        progress.tag = tag;
+        progress.url = request.getBaseUrl();
+        progress.status = Progress.NONE;
+        progress.totalSize = -1;
+        progress.request = request;
+
+        executor = OkUpload.getInstance().getThreadPool().getExecutor();
+        listeners = new HashMap<>();
     }
 
-    /** 每个任务进队列的时候，都会执行该方法 */
-    @Override
-    protected void onPreExecute() {
-        //添加成功的回调
-        UploadListener listener = mUploadInfo.getListener();
-        if (listener != null) listener.onAdd(mUploadInfo);
-
-        mUploadInfo.setNetworkSpeed(0);
-        mUploadInfo.setState(UploadManager.WAITING);
-        postMessage(null, null, null);
+    public UploadTask(Progress progress) {
+        HttpUtils.checkNotNull(progress, "progress == null");
+        this.progress = progress;
+        executor = OkUpload.getInstance().getThreadPool().getExecutor();
+        listeners = new HashMap<>();
     }
 
-    /** 一旦该方法执行，意味着开始下载了 */
-    @Override
-    protected UploadInfo doInBackground(Void... params) {
-        if (isCancelled()) return mUploadInfo;
-        mUploadInfo.setNetworkSpeed(0);
-        mUploadInfo.setState(UploadManager.UPLOADING);
-        postMessage(null, null, null);
+    public UploadTask<T> priority(int priority) {
+        progress.priority = priority;
+        return this;
+    }
 
-        //构建请求体,默认使用post请求上传
-        Response response;
+    public UploadTask<T> extra1(Serializable extra1) {
+        progress.extra1 = extra1;
+        return this;
+    }
+
+    public UploadTask<T> extra2(Serializable extra2) {
+        progress.extra2 = extra2;
+        return this;
+    }
+
+    public UploadTask<T> extra3(Serializable extra3) {
+        progress.extra3 = extra3;
+        return this;
+    }
+
+    public UploadTask<T> save() {
+        UploadManager.getInstance().replace(progress);
+        return this;
+    }
+
+    public UploadTask<T> register(UploadListener<T> listener) {
+        if (listener != null) {
+            listeners.put(listener.tag, listener);
+        }
+        return this;
+    }
+
+    public void unRegister(UploadListener<T> listener) {
+        HttpUtils.checkNotNull(listener, "listener == null");
+        listeners.remove(listener.tag);
+    }
+
+    public void unRegister(String tag) {
+        HttpUtils.checkNotNull(tag, "tag == null");
+        listeners.remove(tag);
+    }
+
+    public UploadTask<T> start() {
+        if (OkUpload.getInstance().getTask(progress.tag) == null || UploadManager.getInstance().get(progress.tag) == null) {
+            throw new IllegalStateException("you must call UploadTask#save() before UploadTask#start()！");
+        }
+        if (progress.status != Progress.WAITING && progress.status != Progress.LOADING) {
+            postOnStart(progress);
+            postWaiting(progress);
+            priorityRunnable = new PriorityRunnable(progress.priority, this);
+            executor.execute(priorityRunnable);
+        } else {
+            OkLogger.w("the task with tag " + progress.tag + " is already in the upload queue, current task status is " + progress.status);
+        }
+        return this;
+    }
+
+    public void restart() {
+        pause();
+        progress.status = Progress.NONE;
+        progress.currentSize = 0;
+        progress.fraction = 0;
+        progress.speed = 0;
+        UploadManager.getInstance().replace(progress);
+        start();
+    }
+
+    /** 暂停的方法 */
+    public void pause() {
+        executor.remove(priorityRunnable);
+        if (progress.status == Progress.WAITING) {
+            postPause(progress);
+        } else if (progress.status == Progress.LOADING) {
+            progress.speed = 0;
+            progress.status = Progress.PAUSE;
+        } else {
+            OkLogger.w("only the task with status WAITING(1) or LOADING(2) can pause, current status is " + progress.status);
+        }
+    }
+
+    /** 删除一个任务,会删除下载文件 */
+    public UploadTask<T> remove() {
+        pause();
+        UploadManager.getInstance().delete(progress.tag);
+        //noinspection unchecked
+        UploadTask<T> task = (UploadTask<T>) OkUpload.getInstance().removeTask(progress.tag);
+        postOnRemove(progress);
+        return task;
+    }
+
+    @Override
+    public void run() {
+        progress.status = Progress.LOADING;
+        postLoading(progress);
+        final Response<T> response;
         try {
-            response = mUploadInfo.getRequest().setCallback(new MergeListener()).execute();
-        } catch (IOException e) {
-            e.printStackTrace();
-            mUploadInfo.setNetworkSpeed(0);
-            mUploadInfo.setState(UploadManager.ERROR);
-            postMessage(null, "网络异常", e);
-            return mUploadInfo;
+            //noinspection unchecked
+            Request<T, ? extends Request> request = (Request<T, ? extends Request>) progress.request;
+            final Call rawCall = request.getRawCall();
+            request.uploadInterceptor(new ProgressRequestBody.UploadInterceptor() {
+                @Override
+                public void uploadProgress(Progress innerProgress) {
+                    if (rawCall.isCanceled()) return;
+                    if (progress.status != Progress.LOADING) {
+                        rawCall.cancel();
+                        return;
+                    }
+                    progress.from(innerProgress);
+                    postLoading(progress);
+                }
+            });
+            response = request.adapt().execute();
+        } catch (Exception e) {
+            postOnError(progress, e);
+            return;
         }
 
         if (response.isSuccessful()) {
-            //解析过程中抛出异常，一般为 json 格式错误，或者数据解析异常
-            try {
-                T t = (T) mUploadInfo.getListener().parseNetworkResponse(response);
-                mUploadInfo.setNetworkSpeed(0);
-                mUploadInfo.setState(UploadManager.FINISH); //上传成功
-                postMessage(t, null, null);
-                return mUploadInfo;
-            } catch (Exception e) {
-                e.printStackTrace();
-                mUploadInfo.setNetworkSpeed(0);
-                mUploadInfo.setState(UploadManager.ERROR);
-                postMessage(null, "解析数据对象出错", e);
-                return mUploadInfo;
-            }
+            postOnFinish(progress, response.body());
         } else {
-            mUploadInfo.setNetworkSpeed(0);
-            mUploadInfo.setState(UploadManager.ERROR);
-            postMessage(null, "数据返回失败", null);
-            return mUploadInfo;
+            postOnError(progress, response.getException());
         }
     }
 
-    private class MergeListener extends AbsCallback<T> {
-
-        private long lastRefreshUiTime;
-
-        public MergeListener() {
-            lastRefreshUiTime = System.currentTimeMillis();
-        }
-
-        //只有这个方法会被调用，主要是为了对接接口，获取进度
-        @Override
-        public void upProgress(long currentSize, long totalSize, float progress, long networkSpeed) {
-            long curTime = System.currentTimeMillis();
-            //每200毫秒刷新一次数据
-            if (curTime - lastRefreshUiTime >= 200 || progress == 1.0f) {
-                mUploadInfo.setState(UploadManager.UPLOADING);
-                mUploadInfo.setUploadLength(currentSize);
-                mUploadInfo.setTotalLength(totalSize);
-                mUploadInfo.setProgress(progress);
-                mUploadInfo.setNetworkSpeed(networkSpeed);
-                postMessage(null, null, null);
-                lastRefreshUiTime = System.currentTimeMillis();
+    private void postOnStart(final Progress progress) {
+        progress.speed = 0;
+        progress.status = Progress.NONE;
+        updateDatabase(progress);
+        HttpUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (UploadListener<T> listener : listeners.values()) {
+                    listener.onStart(progress);
+                }
             }
-        }
-
-        @Override
-        public T convertSuccess(Response response) throws Exception {
-            return null;
-        }
-
-        @Override
-        public void onSuccess(T t, Call call, Response response) {
-        }
+        });
     }
 
-    private void postMessage(T data, String errorMsg, Exception e) {
-        UploadUIHandler.MessageBean<T> messageBean = new UploadUIHandler.MessageBean<>();
-        messageBean.uploadInfo = mUploadInfo;
-        messageBean.errorMsg = errorMsg;
-        messageBean.e = e;
-        messageBean.data = data;
-        Message msg = mUploadUIHandler.obtainMessage();
-        msg.obj = messageBean;
-        mUploadUIHandler.sendMessage(msg);
+    private void postWaiting(final Progress progress) {
+        progress.speed = 0;
+        progress.status = Progress.WAITING;
+        updateDatabase(progress);
+        HttpUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (UploadListener<T> listener : listeners.values()) {
+                    listener.onProgress(progress);
+                }
+            }
+        });
+    }
+
+    private void postPause(final Progress progress) {
+        progress.speed = 0;
+        progress.status = Progress.PAUSE;
+        updateDatabase(progress);
+        HttpUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (UploadListener<T> listener : listeners.values()) {
+                    listener.onProgress(progress);
+                }
+            }
+        });
+    }
+
+    private void postLoading(final Progress progress) {
+        updateDatabase(progress);
+        HttpUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (UploadListener<T> listener : listeners.values()) {
+                    listener.onProgress(progress);
+                }
+            }
+        });
+    }
+
+    private void postOnError(final Progress progress, final Throwable throwable) {
+        progress.speed = 0;
+        progress.status = Progress.ERROR;
+        progress.exception = throwable;
+        updateDatabase(progress);
+        HttpUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (UploadListener<T> listener : listeners.values()) {
+                    listener.onProgress(progress);
+                    listener.onError(progress);
+                }
+            }
+        });
+    }
+
+    private void postOnFinish(final Progress progress, final T t) {
+        progress.speed = 0;
+        progress.fraction = 1.0f;
+        progress.status = Progress.FINISH;
+        updateDatabase(progress);
+        HttpUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (UploadListener<T> listener : listeners.values()) {
+                    listener.onProgress(progress);
+                    listener.onFinish(t, progress);
+                }
+            }
+        });
+    }
+
+    private void postOnRemove(final Progress progress) {
+        updateDatabase(progress);
+        HttpUtils.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                for (UploadListener<T> listener : listeners.values()) {
+                    listener.onRemove(progress);
+                }
+                listeners.clear();
+            }
+        });
+    }
+
+    private void updateDatabase(Progress progress) {
+        ContentValues contentValues = Progress.buildUpdateContentValues(progress);
+        UploadManager.getInstance().update(contentValues, progress.tag);
     }
 }

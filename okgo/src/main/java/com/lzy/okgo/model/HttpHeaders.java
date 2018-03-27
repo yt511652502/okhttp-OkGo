@@ -1,3 +1,18 @@
+/*
+ * Copyright 2016 jeasonlzy(廖子尧)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.lzy.okgo.model;
 
 import android.os.Build;
@@ -22,7 +37,7 @@ import java.util.TimeZone;
 
 /**
  * ================================================
- * 作    者：廖子尧
+ * 作    者：jeasonlzy（廖子尧）Github地址：https://github.com/jeasonlzy
  * 版    本：1.0
  * 创建日期：2015/10/10
  * 描    述：请求头的包装类
@@ -30,7 +45,6 @@ import java.util.TimeZone;
  * ================================================
  */
 public class HttpHeaders implements Serializable {
-
     private static final long serialVersionUID = 8458647755751403873L;
 
     public static final String FORMAT_HTTP_DATA = "EEE, dd MMM y HH:mm:ss 'GMT'";
@@ -47,6 +61,7 @@ public class HttpHeaders implements Serializable {
     public static final String HEAD_KEY_CONTENT_ENCODING = "Content-Encoding";
     public static final String HEAD_KEY_CONTENT_DISPOSITION = "Content-Disposition";
     public static final String HEAD_KEY_CONTENT_RANGE = "Content-Range";
+    public static final String HEAD_KEY_RANGE = "Range";
     public static final String HEAD_KEY_CACHE_CONTROL = "Cache-Control";
     public static final String HEAD_KEY_CONNECTION = "Connection";
     public static final String HEAD_VALUE_CONNECTION_KEEP_ALIVE = "keep-alive";
@@ -117,7 +132,7 @@ public class HttpHeaders implements Serializable {
                 jsonObject.put(entry.getKey(), entry.getValue());
             }
         } catch (JSONException e) {
-            OkLogger.e(e);
+            OkLogger.printStackTrace(e);
         }
         return jsonObject.toString();
     }
@@ -191,12 +206,12 @@ public class HttpHeaders implements Serializable {
                 Class<?> sysResCls = Class.forName("com.android.internal.R$string");
                 Field webUserAgentField = sysResCls.getDeclaredField("web_user_agent");
                 Integer resId = (Integer) webUserAgentField.get(null);
-                webUserAgent = OkGo.getContext().getString(resId);
+                webUserAgent = OkGo.getInstance().getContext().getString(resId);
             } catch (Exception e) {
                 // We have nothing to do
             }
             if (TextUtils.isEmpty(webUserAgent)) {
-                webUserAgent = "Mozilla/5.0 (Linux; U; Android %s) AppleWebKit/533.1 (KHTML, like Gecko) Version/5.0 %sSafari/533.1";
+                webUserAgent = "okhttp-okgo/jeasonlzy";
             }
 
             Locale locale = Locale.getDefault();

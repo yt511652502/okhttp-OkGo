@@ -1,4 +1,21 @@
+/*
+ * Copyright 2016 jeasonlzy(廖子尧)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.lzy.okserver.task;
+
+import com.lzy.okgo.model.Priority;
 
 import java.util.AbstractQueue;
 import java.util.Collection;
@@ -12,7 +29,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * ================================================
- * 作    者：廖子尧
+ * 作    者：jeasonlzy（廖子尧）Github地址：https://github.com/jeasonlzy
  * 版    本：1.0
  * 创建日期：2016/1/19
  * 描    述：带有优先级的阻塞队列
@@ -109,7 +126,7 @@ public class PriorityBlockingQueue<E> extends AbstractQueue<E> implements Blocki
 
         while (curr.next != null) {
             temp = curr.next;
-            if (temp.getPriority().ordinal() > node.getPriority().ordinal()) {
+            if (temp.getPriority() < node.getPriority()) {
                 curr.next = node;
                 node.next = temp;
                 added = true;
@@ -389,8 +406,7 @@ public class PriorityBlockingQueue<E> extends AbstractQueue<E> implements Blocki
         fullyLock();
         try {
             int size = count.get();
-            if (a.length < size)
-                a = (T[]) java.lang.reflect.Array.newInstance(a.getClass().getComponentType(), size);
+            if (a.length < size) a = (T[]) java.lang.reflect.Array.newInstance(a.getClass().getComponentType(), size);
 
             int k = 0;
             for (Node<T> p = (Node<T>) head.next; p != null; p = p.next)
@@ -430,7 +446,7 @@ public class PriorityBlockingQueue<E> extends AbstractQueue<E> implements Blocki
         takeLock.lock();
         try {
             int n = Math.min(maxElements, count.get());
-            // count.get provides visibility to first n Nodes
+            // count.query provides visibility to first n Nodes
             Node<E> h = head;
             int i = 0;
             try {
@@ -570,7 +586,7 @@ public class PriorityBlockingQueue<E> extends AbstractQueue<E> implements Blocki
             setValue(value);
         }
 
-        public Priority getPriority() {
+        public int getPriority() {
             return value.priority;
         }
 
